@@ -2,7 +2,9 @@ import csv
 import requests
 import os
 
-# should update this to match with most recent on master
+############################################
+# Functions taken from flask app helpers.py
+############################################
 def calculate_monthly_debt(certn_data):
     def _as_monthly_payment(trade):
         if not trade:
@@ -25,7 +27,15 @@ def calculate_monthly_debt(certn_data):
             total += _as_monthly_payment(i)
     return int(total)
 
-def get_rent_to_income(rent, income):
+def string_to_int(string):
+    try:
+        return int(float(string))
+    except:
+        return 0
+############################################
+
+#get_rent_to_income(rent, income) returns the SK score impact of the rent to income ratio as a decimal
+def get_rent_to_income_impact(rent, income):
     if rent == 0 or income == 0:
         return 0
     ratio = rent / income * 100
@@ -40,23 +50,19 @@ def get_rent_to_income(rent, income):
     else:
         return -0.10
 
-def string_to_int(string):
-    try:
-        return int(float(string))
-    except:
-        return 0
+# #get_annual_income(ai, pi, oi) returns the total annual income by combining annual income, partner income, and other income
+# def get_annual_income(ai, pi, oi):
+#     total_income = 0
+#     if ai != 'NULL':
+#         total_income += string_to_int(ai)
+#     if pi != 'NULL':
+#         total_income += string_to_int(pi)
+#     if oi != 'NULL':
+#         total_income += string_to_int(oi)
+#     return total_income
 
-def get_annual_income(ai, pi, oi):
-    retval = 0
-    if ai != 'NULL':
-        retval += string_to_int(ai)
-    if pi != 'NULL':
-        retval += string_to_int(pi)
-    if oi != 'NULL':
-        retval += string_to_int(oi)
-    return retval
-
-def get_monthly_debt(debt):
+#get_monthy_debt(debt) returns the SK score impact of the monthly debt as a decimal
+def get_monthly_debt_impact(debt):
     if debt < 500:
         return 0.05
     elif debt < 1000:
@@ -66,12 +72,13 @@ def get_monthly_debt(debt):
     else:
         return -0.10
 
-def get_sk_score(certn_score, positive_diff, negative_diff):
-    pf = 1
-    nf = 1
+#get_sk_score(certn_score, positive_diff
+#depending on the certn_score, the positive_impact and negative_impact will be scaled down by a factor of positive_impact_factor and negative_impact_factor
+def get_sk_score(certn_score, positive_impact, negative_impact):
+    positive_impact_factor = 1
+    negative_impact_factor = 1
     counter = 40
-    # {upper bound: (positive impact, negative impact)}
-    impact_ranges = {
+    impact_factors = { # {upper bound: (positive impact factor, negative impact factor)}
         40: (1, 0),
         50: (0.9, 0.3),
         60: (0.8, 0.4),
@@ -83,16 +90,17 @@ def get_sk_score(certn_score, positive_diff, negative_diff):
     }
     while counter <= 110:
         if certn_score >= 99:
-            pf, nf = impact_ranges[110]
+            positive_impact_factor, negative_impact_factor = impact_factors[110]
             break
         elif certn_score < counter:
-            pf, nf = impact_ranges[counter]
+            positive_impact_factor, negative_impact_factor = impact_factors[counter]
             break
         else:
             counter += 10
-    retval = certn_score * (1 + pf * positive_diff + nf * negative_diff)
-    return int(retval)
-
+    sk_score = certn_score * (1 + positive_impact_factor * positive_impact + negative_impact_factor * negative_impact)
+    if sk_score < 1: sk_score = 1
+    if sk_score > 99: sk_score = 99
+    return int(float(sk_score))
 
 with open('test.csv', 'r') as f:
     reader = csv.reader(f)
@@ -106,56 +114,25 @@ with open('test.csv', 'r') as f:
                 break
             print(counter,": ", row)
             counter += 1
-
             certn_data = requests.get(f"https://api.certn.co/api/v2/applicants/{row[1]}", headers={"Authorization": f"Bearer {os.environ['CERTN_API_KEY']}"}).json()
             certn_score = int(float(certn_data['certn_score']))
-            monthly_rent = int(row[2].replace(",","")) if row[2] != 'NULL' else 0
-            monthly_income = get_annual_income(row[3], row[4], row[5]) / 12
-            positive_diff = 0
-            negative_diff = 0
+            monthly_rent = string_to_int(row[2])
+            monthly_income = (
+                string_to_int(row[3]) + string_to_int(row[4]) + string_to_int(row[5])
+            ) / 12
+            positive_impact = 0
+            negative_impact = 0
 
-            factors = [
-                get_rent_to_income(monthly_rent, monthly_income),
-                get_monthly_debt(calculate_monthly_debt(certn_data)),
+            impacts = [
+                get_rent_to_income_impact(monthly_rent, monthly_income),
+                get_monthly_debt_impact(calculate_monthly_debt(certn_data)),
             ]
 
-            for factor in factors:
-                if factor > 0:
-                    positive_diff += factor
+            for impact in impacts:
+                if impact > 0:
+                    positive_impact += impact
                 else:
-                    negative_diff += factor
+                    negative_impact += impact
 
-            sk_score = get_sk_score(certn_score, positive_diff, negative_diff)
-            if sk_score < 1: sk_score = 1
-            if sk_score > 99: sk_score = 99
+            sk_score = get_sk_score(certn_score, positive_impact, negative_impact)
             writer.writerow([f"{certn_score}", f"{monthly_rent / monthly_income if monthly_income else 'Invalid Income'}", f"{calculate_monthly_debt(certn_data)}", f"{sk_score}"])
-
-# with open('test.csv', 'r') as f:
-#     reader = csv.reader(f)
-#     next(reader)
-#     counter = 0
-#     for row in reader:
-#         if counter > 9:
-#             break
-#         counter += 1
-
-#         certn_data = requests.get(f"https://api.certn.co/api/v2/applicants/bca338e0-1ffe-4409-a217-3d024603ed95", headers={"Authorization": f"Bearer {os.environ['CERTN_API_KEY']}"}).json()
-#         certn_score = int(float(certn_data['certn_score']))
-#         monthly_rent = int(row[2].replace(",","")) if row[2] != 'NULL' else 0
-#         monthly_income = get_annual_income(row[3], row[4], row[5]) / 12
-#         positive_diff = 0
-#         negative_diff = 0
-
-#         factors = [
-#             get_rent_to_income(monthly_rent, monthly_income),
-#             get_monthly_debt(calculate_monthly_debt(certn_data)),
-#         ]
-
-#         for factor in factors:
-#             if factor > 0:
-#                 positive_diff += factor
-#             else:
-#                 negative_diff += factor
-
-#         sk_score = get_sk_score(certn_score, positive_diff, negative_diff)
-    
